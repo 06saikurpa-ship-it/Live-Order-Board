@@ -1,0 +1,233 @@
+<!--
+Live Order Board - single-file demo
+- Uses Firebase Firestore (replace firebaseConfig with your project's values)
+- Save this as index.html in a repo named `live-order-board` (or another name)
+- Enable GitHub Pages on the repo (branch: main, folder: / (root))
+
+Expected GitHub Pages URL when you publish:
+https://<your-github-username>.github.io/live-order-board/
+
+Features:
+- Add orders with customer name, item summary, notes
+- Orders stored in Firestore collection `orders`
+- Move through statuses: New, Preparing, Ready, Collected
+- Real-time updates via onSnapshot
+
+SECURITY NOTE: For production, lock down Firestore rules. This demo uses a permissive rule during development.
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Order Board</title>
+  <style>
+    :root{--bg:#0f172a;--card:#0b1220;--muted:#9aa4b2;--accent:#10b981}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{background:linear-gradient(180deg,#071027 0%, #071a2b 100%);color:#e6eef8;padding:20px}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    h1{margin:0;font-size:20px}
+    .board{display:flex;gap:12px}
+    .column{background:rgba(255,255,255,0.03);padding:12px;border-radius:10px;flex:1;min-width:200px}
+    .col-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .order{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:10px;border-radius:8px;margin-bottom:10px;border:1px solid rgba(255,255,255,0.03)}
+    .muted{color:var(--muted);font-size:13px}
+    form{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+    input,textarea,select,button{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
+    input:focus,textarea:focus,select:focus{outline:2px solid rgba(16,185,129,0.12)}
+    textarea{resize:vertical}
+    .tiny{font-size:12px;padding:6px}
+    .actions{display:flex;gap:6px;margin-top:8px}
+    .btn{cursor:pointer}
+    .ghost{background:transparent;border:1px dashed rgba(255,255,255,0.04)}
+    .accent{border:1px solid rgba(16,185,129,0.12)}
+    footer{margin-top:12px;color:var(--muted);font-size:13px}
+    .timestamp{font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%2310b981'/><path d='M6 9h12v2H6zM6 13h8v2H6z' fill='white'/></svg>" alt="logo" style="width:36px;height:36px;border-radius:8px;"/>
+    <div>
+      <h1>Live Order Board</h1>
+      <div class="muted">Real-time orders (Firebase Firestore)</div>
+    </div>
+  </header>
+
+  <section>
+    <form id="orderForm">
+      <input id="customer" placeholder="Customer name" required />
+      <input id="summary" placeholder="Item summary (e.g. 2x burger)" required />
+      <input id="notes" placeholder="Notes (optional)" />
+      <select id="status">
+        <option value="New">New</option>
+        <option value="Preparing">Preparing</option>
+        <option value="Ready">Ready</option>
+        <option value="Collected">Collected</option>
+      </select>
+      <button class="btn" type="submit">Add</button>
+    </form>
+  </section>
+
+  <main class="board" id="board">
+    <div class="column" data-status="New">
+      <div class="col-title"><strong>New</strong><span class="muted" id="count-New">0</span></div>
+      <div class="list" id="list-New"></div>
+    </div>
+    <div class="column" data-status="Preparing">
+      <div class="col-title"><strong>Preparing</strong><span class="muted" id="count-Preparing">0</span></div>
+      <div class="list" id="list-Preparing"></div>
+    </div>
+    <div class="column" data-status="Ready">
+      <div class="col-title"><strong>Ready</strong><span class="muted" id="count-Ready">0</span></div>
+      <div class="list" id="list-Ready"></div>
+    </div>
+    <div class="column" data-status="Collected">
+      <div class="col-title"><strong>Collected</strong><span class="muted" id="count-Collected">0</span></div>
+      <div class="list" id="list-Collected"></div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="muted">Hints: Click an order to open quick actions (move status, delete). Timestamps are local time.</div>
+  </footer>
+
+  <!-- Firebase SDK (v9 modular) -->
+  <script type="module">
+    // ---- 1) Add your Firebase config here (create a Firebase project and Firestore) ----
+    // Replace the config object below with your project's settings (found in Firebase console -> Project settings)
+    const firebaseConfig = {
+      apiKey: "REPLACE_ME",
+      authDomain: "REPLACE_ME",
+      projectId: "REPLACE_ME",
+      storageBucket: "REPLACE_ME",
+      messagingSenderId: "REPLACE_ME",
+      appId: "REPLACE_ME"
+    };
+
+    // ---- 2) Firebase initialization (do not change) ----
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
+    import { getFirestore, collection, addDoc, doc, onSnapshot, updateDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const ordersCol = collection(db, 'orders');
+
+    // Utility: format timestamp
+    function fmt(ts){
+      try{
+        const d = ts ? new Date(ts.seconds*1000) : new Date();
+        return d.toLocaleString();
+      }catch(e){return ''}
+    }
+
+    // Render helpers
+    function createOrderElement(id, data){
+      const el = document.createElement('div');
+      el.className = 'order';
+      el.dataset.id = id;
+      el.innerHTML = `
+        <div><strong>${escapeHtml(data.customer)}</strong> <span class="muted">${escapeHtml(data.summary)}</span></div>
+        <div class="muted">${escapeHtml(data.notes || '')}</div>
+        <div class="timestamp muted">${fmt(data.createdAt)}</div>
+      `;
+
+      el.addEventListener('click', ()=>openActions(id, data));
+      return el;
+    }
+
+    function escapeHtml(s){
+      if(!s) return '';
+      return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+    }
+
+    // Quick actions when clicking an order
+    function openActions(id, data){
+      const statusOrder = ['New','Preparing','Ready','Collected'];
+      const container = document.createElement('div');
+      container.style.position='fixed';container.style.left='50%';container.style.top='50%';container.style.transform='translate(-50%,-50%)';container.style.background='#071428';container.style.padding='12px';container.style.border='1px solid rgba(255,255,255,0.04)';container.style.borderRadius='10px';
+      container.innerHTML = `
+        <div style='font-weight:600;margin-bottom:8px'>${escapeHtml(data.customer)} — ${escapeHtml(data.summary)}</div>
+      `;
+      const actions = document.createElement('div');
+      actions.style.display='flex';actions.style.gap='8px';actions.style.flexWrap='wrap';
+
+      // Move buttons
+      statusOrder.forEach(s=>{
+        if(s!==data.status){
+          const b = document.createElement('button');b.className='btn tiny';b.textContent=`Move → ${s}`;
+          b.onclick = async ()=>{await moveStatus(id, s); document.body.removeChild(container)};
+          actions.appendChild(b);
+        }
+      });
+      const del = document.createElement('button');del.className='btn tiny ghost';del.textContent='Delete';
+      del.onclick = async ()=>{if(confirm('Delete order?')){await deleteDoc(doc(db,'orders',id));document.body.removeChild(container)}};
+      const close = document.createElement('button');close.className='btn tiny';close.textContent='Close';close.onclick=()=>document.body.removeChild(container);
+
+      container.appendChild(actions);
+      container.appendChild(del);
+      container.appendChild(close);
+      document.body.appendChild(container);
+    }
+
+    async function moveStatus(id, newStatus){
+      await updateDoc(doc(db,'orders',id), {status:newStatus});
+    }
+
+    // Add order
+    document.getElementById('orderForm').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const customer = document.getElementById('customer').value.trim();
+      const summary = document.getElementById('summary').value.trim();
+      const notes = document.getElementById('notes').value.trim();
+      const status = document.getElementById('status').value;
+      if(!customer || !summary) return;
+      await addDoc(ordersCol, {
+        customer, summary, notes, status,
+        createdAt: new Date()
+      });
+      e.target.reset();
+    });
+
+    // Real-time listener
+    // We query ordered by createdAt for stable ordering. Using onSnapshot for live updates.
+    const q = query(ordersCol, orderBy('createdAt'));
+    onSnapshot(q, (snapshot)=>{
+      const lists = {New:document.getElementById('list-New'), Preparing:document.getElementById('list-Preparing'), Ready:document.getElementById('list-Ready'), Collected:document.getElementById('list-Collected')};
+      // clear
+      Object.values(lists).forEach(l=>l.innerHTML='');
+      const counts = {New:0,Preparing:0,Ready:0,Collected:0};
+      snapshot.docs.forEach(docSnap=>{
+        const id = docSnap.id; const data = docSnap.data();
+        // Normalize createdAt if it's Firestore Timestamp or Date
+        if(data.createdAt && data.createdAt.toDate) data.createdAt = data.createdAt; // keep
+        const status = data.status || 'New';
+        const el = createOrderElement(id, data);
+        lists[status].appendChild(el);
+        counts[status]++;
+      });
+      // update counts
+      for(const s of Object.keys(counts)) document.getElementById('count-'+s).textContent = counts[s];
+    });
+
+  </script>
+
+  <!-- Notes for deployment:
+    1) Create a Firebase project and enable Firestore in test mode (for development only).
+    2) Replace firebaseConfig above with your project's config.
+    3) Save this file as index.html in the repo root.
+    4) Push to GitHub -> Settings -> Pages -> Choose branch `main` and root folder -> Save
+    5) Wait a minute, then the site will be available at https://<username>.github.io/<repo>/
+
+    Firestore rules example (development only):
+    service cloud.firestore {
+      match /databases/{database}/documents {
+        match /{document=**} {
+          allow read, write: if true;
+        }
+      }
+    }
+  -->
+</body>
+</html>
