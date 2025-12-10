@@ -1,233 +1,256 @@
-<!--
-Live Order Board - single-file demo
-- Uses Firebase Firestore (replace firebaseConfig with your project's values)
-- Save this as index.html in a repo named `live-order-board` (or another name)
-- Enable GitHub Pages on the repo (branch: main, folder: / (root))
-
-Expected GitHub Pages URL when you publish:
-https://<your-github-username>.github.io/live-order-board/
-
-Features:
-- Add orders with customer name, item summary, notes
-- Orders stored in Firestore collection `orders`
-- Move through statuses: New, Preparing, Ready, Collected
-- Real-time updates via onSnapshot
-
-SECURITY NOTE: For production, lock down Firestore rules. This demo uses a permissive rule during development.
--->
-
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Live Order Board</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Live Order Board — Fixed</title>
   <style>
-    :root{--bg:#0f172a;--card:#0b1220;--muted:#9aa4b2;--accent:#10b981}
-    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
-    body{background:linear-gradient(180deg,#071027 0%, #071a2b 100%);color:#e6eef8;padding:20px}
-    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
-    h1{margin:0;font-size:20px}
-    .board{display:flex;gap:12px}
-    .column{background:rgba(255,255,255,0.03);padding:12px;border-radius:10px;flex:1;min-width:200px}
-    .col-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-    .order{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:10px;border-radius:8px;margin-bottom:10px;border:1px solid rgba(255,255,255,0.03)}
-    .muted{color:var(--muted);font-size:13px}
-    form{display:flex;gap:8px;align-items:center;margin-bottom:12px}
-    input,textarea,select,button{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
-    input:focus,textarea:focus,select:focus{outline:2px solid rgba(16,185,129,0.12)}
-    textarea{resize:vertical}
-    .tiny{font-size:12px;padding:6px}
-    .actions{display:flex;gap:6px;margin-top:8px}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{
+      --bg:#071428; --card:#0b1220; --muted:rgba(255,255,255,0.75);
+      font-family:Inter,Arial,Helvetica,sans-serif;
+      background-image:url('https://images.unsplash.com/photo-1498654896293-37aacf113fd9?auto=format&fit=crop&w=1600&q=60');
+      background-size:cover;background-position:center;color:#fff;background-color:var(--bg);
+    }
+    [data-theme='light']{ --bg:#f6f8fb; --card:#ffffff; --muted:#334155; color:#071428 }
+    [data-theme='restaurant']{ --bg:#2b1608; --card:#3a220f; --muted:#f5e6d3; color:#f5e6d3 }
+
+    .app-container{width:100vw;min-height:100vh;padding:28px;background:rgba(3,7,18,0.55);backdrop-filter:blur(6px)}
+
+    /* header + form */
+    header{display:flex;align-items:center;gap:12px;margin-left:50px;margin-top:20px}
+    h1{margin:0;font-size:24px}
+    .controls{display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap}
+    input,select,button{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);background:transparent;color:inherit}
+    input:focus,select:focus,button:focus{outline:2px solid rgba(16,185,129,0.12)}
+    .menu-select{min-width:200px}
     .btn{cursor:pointer}
-    .ghost{background:transparent;border:1px dashed rgba(255,255,255,0.04)}
-    .accent{border:1px solid rgba(16,185,129,0.12)}
-    footer{margin-top:12px;color:var(--muted);font-size:13px}
-    .timestamp{font-size:12px;color:var(--muted)}
+
+    /* side menu */
+    #hamburger{position:fixed;left:14px;top:14px;z-index:1200;background:transparent;border:none;color:var(--muted);font-size:28px;cursor:pointer}
+    #sideMenu{position:fixed;left:-320px;top:0;height:100%;width:320px;background:var(--card);padding:20px;color:var(--muted);transition:left .26s;z-index:1100;box-shadow:4px 0 18px rgba(0,0,0,0.4)}
+    #sideMenu.open{left:0}
+    .menu-btn{display:block;padding:8px 6px;margin:8px 0;border-radius:6px;cursor:pointer;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03)}
+    .menu-title{font-weight:700;margin-bottom:12px}
+
+    /* orders area */
+    main{margin-top:24px}
+    .status-row{display:flex;gap:12px}
+    .column{flex:1;background:rgba(255,255,255,0.02);padding:12px;border-radius:10px;min-height:200px}
+    .col-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .order{display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:8px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));margin-bottom:8px;border:1px solid rgba(0,0,0,0.12)}
+    .logo{width:48px;height:48px;border-radius:8px;object-fit:cover}
+    .muted{color:var(--muted);font-size:13px}
+
+    /* modal (fallback when popup blocked) */
+    #modalOverlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;z-index:1500}
+    #modal{background:var(--card);padding:16px;border-radius:8px;color:var(--muted);max-width:520px;width:90%}
+    #modalClose{float:right;cursor:pointer}
+
+    /* favourites list inside menu */
+    .favs-list{margin-top:12px}
+    .fav-item{padding:6px;border-radius:6px;margin-bottom:6px;background:rgba(255,255,255,0.02);cursor:pointer}
+
+    /* responsive */
+    @media (max-width:900px){
+      .status-row{flex-direction:column}
+      #sideMenu{width:260px}
+      .menu-select{min-width:150px}
+    }
   </style>
 </head>
-<body>
-  <header>
-    <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%2310b981'/><path d='M6 9h12v2H6zM6 13h8v2H6z' fill='white'/></svg>" alt="logo" style="width:36px;height:36px;border-radius:8px;"/>
-    <div>
+<body data-theme="dark">
+  <button id="hamburger" aria-label="Open menu">☰</button>
+
+  <nav id="sideMenu" aria-hidden="true">
+    <div class="menu-title">Live Order Board — Menu</div>
+    <button class="menu-btn" id="favsBtn">Favourites</button>
+    <div id="favsContainer" class="favs-list" aria-live="polite"></div>
+    <hr style="border:none;border-top:1px solid rgba(255,255,255,0.03);margin:12px 0;">
+    <button class="menu-btn" id="themeToggle">Toggle Theme</button>
+    <button class="menu-btn" id="helpBtn">Help</button>
+    <button class="menu-btn" id="aboutBtn">About</button>
+  </nav>
+
+  <div class="app-container" id="app">
+    <header>
       <h1>Live Order Board</h1>
-      <div class="muted">Real-time orders (Firebase Firestore)</div>
-    </div>
-  </header>
+    </header>
 
-  <section>
-    <form id="orderForm">
-      <input id="customer" placeholder="Customer name" required />
-      <input id="summary" placeholder="Item summary (e.g. 2x burger)" required />
-      <input id="notes" placeholder="Notes (optional)" />
-      <select id="status">
-        <option value="New">New</option>
-        <option value="Preparing">Preparing</option>
-        <option value="Ready">Ready</option>
-        <option value="Collected">Collected</option>
+    <div class="controls" role="form" aria-label="Order form">
+      <input id="customer" class="menu-select" placeholder="Customer name" />
+
+      <select id="item" class="menu-select" aria-label="Item select">
+        <option value="Porridge">Flahavan’s Organic Porridge – Pear & Cinnamon / Cranberries</option>
+        <option value="Granola">Homemade Granola Bowl – Berry Compote, Honey & Greek Yoghurt</option>
+        <option value="Traditional">The Traditional – Bacon & Sausage, Egg, Mushrooms</option>
+        <option value="Vegetarian">Vegetarian Breakfast – Eggs, Mushrooms, Potato Cake</option>
+        <option value="PoachedEggs">Poached Eggs with Bacon – Soda Bread & Chutney</option>
+        <option value="Chorizo">Gubbeen Chorizo Scrambled Eggs – Potato Cake</option>
+        <option value="Pancakes">Pancakes – Berries / Bacon / Nutella</option>
+        <option value="MushroomBruschetta">Mushroom Bruschetta with Vegan Feta</option>
+        <option value="Salmon">Smoked Irish Salmon with Potato Cakes</option>
+        <option value="Scones">Sweet Scones</option>
+        <option value="BananaBread">Banana Bread</option>
+        <option value="SodaBread">Irish Soda Bread</option>
+        <option value="Tea">Barry's Breakfast Tea</option>
+        <option value="Coffee">Filter Coffee</option>
+        <option value="HerbalTea">Selection of Herbal Teas</option>
+        <option value="HotChocolate">Hot Chocolate</option>
+        <option value="IceCream">Ice Cream</option>
+        <option value="OrangeJuice">Orange Juice</option>
+        <option value="AppleJuice">Apple Juice</option>
+        <option value="Pastries">Pastries</option>
       </select>
-      <button class="btn" type="submit">Add</button>
-    </form>
-  </section>
 
-  <main class="board" id="board">
-    <div class="column" data-status="New">
-      <div class="col-title"><strong>New</strong><span class="muted" id="count-New">0</span></div>
-      <div class="list" id="list-New"></div>
+      <input id="notes" placeholder="Notes (optional)" />
+
+      <select id="status">
+        <option>New</option>
+        <option>Preparing</option>
+        <option>Ready</option>
+        <option>Collected</option>
+      </select>
+
+      <button id="placeBtn" class="btn">Place Order</button>
     </div>
-    <div class="column" data-status="Preparing">
-      <div class="col-title"><strong>Preparing</strong><span class="muted" id="count-Preparing">0</span></div>
-      <div class="list" id="list-Preparing"></div>
-    </div>
-    <div class="column" data-status="Ready">
-      <div class="col-title"><strong>Ready</strong><span class="muted" id="count-Ready">0</span></div>
-      <div class="list" id="list-Ready"></div>
-    </div>
-    <div class="column" data-status="Collected">
-      <div class="col-title"><strong>Collected</strong><span class="muted" id="count-Collected">0</span></div>
-      <div class="list" id="list-Collected"></div>
-    </div>
-  </main>
 
-  <footer>
-    <div class="muted">Hints: Click an order to open quick actions (move status, delete). Timestamps are local time.</div>
-  </footer>
+    <main>
+      <div class="status-row">
+        <div class="column" data-status="New">
+          <div class="col-title"><strong>New</strong><span class="muted" id="count-New">0</span></div>
+          <div class="list" id="list-New"></div>
+        </div>
+        <div class="column" data-status="Preparing">
+          <div class="col-title"><strong>Preparing</strong><span class="muted" id="count-Preparing">0</span></div>
+          <div class="list" id="list-Preparing"></div>
+        </div>
+        <div class="column" data-status="Ready">
+          <div class="col-title"><strong>Ready</strong><span class="muted" id="count-Ready">0</span></div>
+          <div class="list" id="list-Ready"></div>
+        </div>
+        <div class="column" data-status="Collected">
+          <div class="col-title"><strong>Collected</strong><span class="muted" id="count-Collected">0</span></div>
+          <div class="list" id="list-Collected"></div>
+        </div>
+      </div>
+    </main>
 
-  <!-- Firebase SDK (v9 modular) -->
-  <script type="module">
-    // ---- 1) Add your Firebase config here (create a Firebase project and Firestore) ----
-    // Replace the config object below with your project's settings (found in Firebase console -> Project settings)
-    const firebaseConfig = {
-      apiKey: "REPLACE_ME",
-      authDomain: "REPLACE_ME",
-      projectId: "REPLACE_ME",
-      storageBucket: "REPLACE_ME",
-      messagingSenderId: "REPLACE_ME",
-      appId: "REPLACE_ME"
-    };
+  </div>
 
-    // ---- 2) Firebase initialization (do not change) ----
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
-    import { getFirestore, collection, addDoc, doc, onSnapshot, updateDoc, deleteDoc, query, orderBy } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js';
+  <!-- Modal fallback for popup-blocked environments -->
+  <div id="modalOverlay"><div id="modal"><div id="modalClose">✕</div><div id="modalContent"></div></div></div>
 
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-    const ordersCol = collection(db, 'orders');
+  <script>
+    // === Setup DOM refs safely ===
+    function $id(id){ return document.getElementById(id); }
+    const hamburger = $id('hamburger');
+    const sideMenu = $id('sideMenu');
+    const placeBtn = $id('placeBtn');
+    const customer = $id('customer');
+    const item = $id('item');
+    const notes = $id('notes');
+    const status = $id('status');
+    const list_New = $id('list-New');
+    const list_Preparing = $id('list-Preparing');
+    const list_Ready = $id('list-Ready');
+    const list_Collected = $id('list-Collected');
+    const favsContainer = $id('favsContainer');
+    const favsBtn = $id('favsBtn');
+    const themeToggle = $id('themeToggle');
+    const helpBtn = $id('helpBtn');
+    const aboutBtn = $id('aboutBtn');
+    const modalOverlay = $id('modalOverlay');
+    const modalContent = $id('modalContent');
+    const modalClose = $id('modalClose');
 
-    // Utility: format timestamp
-    function fmt(ts){
-      try{
-        const d = ts ? new Date(ts.seconds*1000) : new Date();
-        return d.toLocaleString();
-      }catch(e){return ''}
-    }
+    // === State ===
+    const ORDERS_KEY = 'lob_orders_v2';
+    let ORDERS = [];
+    let FAV = new Set(JSON.parse(localStorage.getItem('lob_fav_v1')||'[]'));
 
-    // Render helpers
-    function createOrderElement(id, data){
-      const el = document.createElement('div');
-      el.className = 'order';
-      el.dataset.id = id;
-      el.innerHTML = `
-        <div><strong>${escapeHtml(data.customer)}</strong> <span class="muted">${escapeHtml(data.summary)}</span></div>
-        <div class="muted">${escapeHtml(data.notes || '')}</div>
-        <div class="timestamp muted">${fmt(data.createdAt)}</div>
-      `;
+    function saveAll(){ localStorage.setItem(ORDERS_KEY,JSON.stringify(ORDERS)); localStorage.setItem('lob_fav_v1',JSON.stringify([...FAV])); }
+    function loadAll(){ try{ORDERS=JSON.parse(localStorage.getItem(ORDERS_KEY)||'[]')}catch(e){ORDERS=[];} try{FAV=new Set(JSON.parse(localStorage.getItem('lob_fav_v1')||'[]'))}catch(e){FAV=new Set();} }
 
-      el.addEventListener('click', ()=>openActions(id, data));
-      return el;
-    }
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-    function escapeHtml(s){
-      if(!s) return '';
-      return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
-    }
+    // === Rendering ===
+    function render(){
+      const lists = { New: list_New, Preparing: list_Preparing, Ready: list_Ready, Collected: list_Collected };
+      Object.values(lists).forEach(l => l.innerHTML = '');
+      const counts = { New: 0, Preparing: 0, Ready: 0, Collected: 0 };
 
-    // Quick actions when clicking an order
-    function openActions(id, data){
-      const statusOrder = ['New','Preparing','Ready','Collected'];
-      const container = document.createElement('div');
-      container.style.position='fixed';container.style.left='50%';container.style.top='50%';container.style.transform='translate(-50%,-50%)';container.style.background='#071428';container.style.padding='12px';container.style.border='1px solid rgba(255,255,255,0.04)';container.style.borderRadius='10px';
-      container.innerHTML = `
-        <div style='font-weight:600;margin-bottom:8px'>${escapeHtml(data.customer)} — ${escapeHtml(data.summary)}</div>
-      `;
-      const actions = document.createElement('div');
-      actions.style.display='flex';actions.style.gap='8px';actions.style.flexWrap='wrap';
-
-      // Move buttons
-      statusOrder.forEach(s=>{
-        if(s!==data.status){
-          const b = document.createElement('button');b.className='btn tiny';b.textContent=`Move → ${s}`;
-          b.onclick = async ()=>{await moveStatus(id, s); document.body.removeChild(container)};
-          actions.appendChild(b);
-        }
+      ORDERS.slice().sort((a,b)=> b.t - a.t).forEach(o => {
+        const el = buildCard(o);
+        const target = lists[o.s] || lists['New'];
+        target.appendChild(el);
+        counts[o.s] = (counts[o.s]||0) + 1;
       });
-      const del = document.createElement('button');del.className='btn tiny ghost';del.textContent='Delete';
-      del.onclick = async ()=>{if(confirm('Delete order?')){await deleteDoc(doc(db,'orders',id));document.body.removeChild(container)}};
-      const close = document.createElement('button');close.className='btn tiny';close.textContent='Close';close.onclick=()=>document.body.removeChild(container);
 
-      container.appendChild(actions);
-      container.appendChild(del);
-      container.appendChild(close);
-      document.body.appendChild(container);
+      Object.keys(counts).forEach(k => { const el = $id('count-'+k); if(el) el.textContent = counts[k]; });
+      renderFavsInMenu();
     }
 
-    async function moveStatus(id, newStatus){
-      await updateDoc(doc(db,'orders',id), {status:newStatus});
+    function buildCard(o){
+      const d = document.createElement('div'); d.className = 'order'; d.dataset.id = o.id;
+
+      const img = document.createElement('img'); img.className='logo'; img.src = randomThumb(o.i); img.alt = o.i;
+
+      const main = document.createElement('div');
+      main.innerHTML = `<div><strong>${esc(o.c)}</strong> <span class='muted'>${esc(o.i)}</span></div><div class='muted'>${esc(o.n||'')}</div><div class='muted'>${new Date(o.t).toLocaleString()}</div>`;
+
+      // actions container
+      const actions = document.createElement('div'); actions.style.marginTop='8px'; actions.style.display='flex'; actions.style.gap='6px';
+      const moveBtn = document.createElement('button'); moveBtn.className='btn'; moveBtn.textContent='Move'; moveBtn.addEventListener('click', ()=> openMoveModal(o.id));
+      const favBtn = document.createElement('button'); favBtn.className='btn'; favBtn.textContent = FAV.has(o.id)?'★':'☆'; favBtn.addEventListener('click', ()=>{ toggleFav(o.id); favBtn.textContent = FAV.has(o.id)?'★':'☆'; });
+      actions.appendChild(moveBtn); actions.appendChild(favBtn);
+      main.appendChild(actions);
+
+      d.appendChild(img); d.appendChild(main);
+      return d;
     }
 
-    // Add order
-    document.getElementById('orderForm').addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      const customer = document.getElementById('customer').value.trim();
-      const summary = document.getElementById('summary').value.trim();
-      const notes = document.getElementById('notes').value.trim();
-      const status = document.getElementById('status').value;
-      if(!customer || !summary) return;
-      await addDoc(ordersCol, {
-        customer, summary, notes, status,
-        createdAt: new Date()
-      });
-      e.target.reset();
+    // === Favorites ===
+    function toggleFav(id){ if(FAV.has(id)) FAV.delete(id); else FAV.add(id); saveAll(); render(); }
+    function renderFavsInMenu(){ favsContainer.innerHTML = ''; if(FAV.size===0){ favsContainer.innerHTML = '<div class="muted">No favourites yet</div>'; return; } [...FAV].forEach(id=>{ const o = ORDERS.find(x=>x.id===id); if(!o) return; const b = document.createElement('div'); b.className='fav-item'; b.textContent = o.c + ' — ' + o.i; b.addEventListener('click', ()=>{ // quick reorder
+        addOrder(o.c,o.i,o.n,'New'); toggleMenu(); }); favsContainer.appendChild(b); }); }
+
+    // === Move modal (status buttons) ===
+    function openMoveModal(id){ const o = ORDERS.find(x=>x.id===id); if(!o) return; const statuses = ['New','Preparing','Ready','Collected']; modalContent.innerHTML = `<h3>${esc(o.c)} — ${esc(o.i)}</h3><div style="margin-top:8px"></div>`; const container = document.createElement('div'); container.style.display='flex'; container.style.gap='8px'; statuses.forEach(s=>{ if(s!==o.s){ const b = document.createElement('button'); b.className='btn'; b.textContent = 'Move → '+s; b.addEventListener('click', ()=>{ o.s = s; saveAll(); render(); closeModal(); }); container.appendChild(b); } }); const del = document.createElement('button'); del.className='btn'; del.textContent='Delete'; del.style.marginLeft='8px'; del.addEventListener('click', ()=>{ if(confirm('Delete order?')){ ORDERS = ORDERS.filter(x=>x.id!==id); saveAll(); render(); closeModal(); } }); modalContent.appendChild(container); modalContent.appendChild(del); showModal(); }
+
+    // === Modal helpers ===
+    function showModal(){ modalOverlay.style.display='flex'; }
+    function closeModal(){ modalOverlay.style.display='none'; modalContent.innerHTML=''; }
+
+    // === Add order ===
+    function addOrder(c,i,n,s){ const o={ id:'o'+Date.now(), c, i, n, s, t:Date.now() }; ORDERS.push(o); saveAll(); render(); }
+
+    // === Utilities ===
+    function randomThumb(label){ const colors = ['#1f2937','#0f172a','#18324a','#2d1b47','#203a2e','#4b2e2e']; const bg = colors[Math.floor(Math.random()*colors.length)]; const t = (label||'Item').slice(0,14).replace(/&/g,'and'); const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='120' height='80'><rect width='100%' height='100%' rx='8' fill='${bg}'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' font-size='12' fill='%23fff'>${t}</text></svg>`; return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg); }
+
+    // === Menu & theme wiring ===
+    function toggleMenu(){ sideMenu.classList.toggle('open'); sideMenu.setAttribute('aria-hidden', sideMenu.classList.contains('open')? 'false':'true'); }
+    function cycleTheme(){ const current = document.body.getAttribute('data-theme'); const next = current==='dark'?'light': current==='light'?'restaurant':'dark'; document.body.setAttribute('data-theme', next); }
+
+    // === Boot ===
+    document.addEventListener('DOMContentLoaded', ()=>{
+      loadAll(); render();
+
+      placeBtn.addEventListener('click', (e)=>{ e.preventDefault(); const c=customer.value.trim(); if(!c) return alert('Customer name required'); addOrder(c,item.value,notes.value,status.value); customer.value=''; notes.value=''; });
+
+      hamburger.addEventListener('click', toggleMenu);
+      themeToggle.addEventListener('click', cycleTheme);
+      helpBtn.addEventListener('click', ()=> alert('Help:\n• Add orders using the form.\n• Click Move to change status.\n• Click ☆ to favourite an order.'));
+      aboutBtn.addEventListener('click', ()=> alert('Live Order Board — demo (local storage).'));
+      favsBtn.addEventListener('click', ()=>{ if(sideMenu.classList.contains('open')){ renderFavsInMenu(); } else { toggleMenu(); } });
+
+      modalClose.addEventListener('click', closeModal);
+      modalOverlay.addEventListener('click', (e)=>{ if(e.target===modalOverlay) closeModal(); });
+
+      // close menu when clicking outside
+      document.addEventListener('click',(ev)=>{ if(sideMenu.classList.contains('open')){ if(!sideMenu.contains(ev.target) && ev.target!==hamburger) toggleMenu(); } });
     });
-
-    // Real-time listener
-    // We query ordered by createdAt for stable ordering. Using onSnapshot for live updates.
-    const q = query(ordersCol, orderBy('createdAt'));
-    onSnapshot(q, (snapshot)=>{
-      const lists = {New:document.getElementById('list-New'), Preparing:document.getElementById('list-Preparing'), Ready:document.getElementById('list-Ready'), Collected:document.getElementById('list-Collected')};
-      // clear
-      Object.values(lists).forEach(l=>l.innerHTML='');
-      const counts = {New:0,Preparing:0,Ready:0,Collected:0};
-      snapshot.docs.forEach(docSnap=>{
-        const id = docSnap.id; const data = docSnap.data();
-        // Normalize createdAt if it's Firestore Timestamp or Date
-        if(data.createdAt && data.createdAt.toDate) data.createdAt = data.createdAt; // keep
-        const status = data.status || 'New';
-        const el = createOrderElement(id, data);
-        lists[status].appendChild(el);
-        counts[status]++;
-      });
-      // update counts
-      for(const s of Object.keys(counts)) document.getElementById('count-'+s).textContent = counts[s];
-    });
-
   </script>
-
-  <!-- Notes for deployment:
-    1) Create a Firebase project and enable Firestore in test mode (for development only).
-    2) Replace firebaseConfig above with your project's config.
-    3) Save this file as index.html in the repo root.
-    4) Push to GitHub -> Settings -> Pages -> Choose branch `main` and root folder -> Save
-    5) Wait a minute, then the site will be available at https://<username>.github.io/<repo>/
-
-    Firestore rules example (development only):
-    service cloud.firestore {
-      match /databases/{database}/documents {
-        match /{document=**} {
-          allow read, write: if true;
-        }
-      }
-    }
-  -->
 </body>
 </html>
